@@ -143,9 +143,8 @@ int main(void)
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
   HAL_ADC_Start_IT(&hadc1);
 
-  //HAL_TIM_Base_Start_IT(&htim7);
-  //HAL_SPI_Init(&hspi3);
 
+  //oled
   DOT_MATRIX_Init_TMR(&hspi3, &htim2);
   MATRIX_DisplayMessage(MATRIX_DISPLAY_UNIT1, bpm_buffer, sizeof(bpm_buffer));
 
@@ -230,7 +229,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		sprintf(bpm_buffer, "%dbpm", (int)bpm);
 		cnt_bpm = 0;
 	}
-
 }
 
 //calcul des coefs du passe bas
