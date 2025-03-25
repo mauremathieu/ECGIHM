@@ -1,0 +1,14 @@
+../Core/Src/DOT_MATRIX.c:137:13:SPI_TX_Byte	1
+../Core/Src/DOT_MATRIX.c:142:13:SS_ENABLE	1
+../Core/Src/DOT_MATRIX.c:147:13:SS_DISABLE	1
+../Core/Src/DOT_MATRIX.c:152:13:TxByte	1
+../Core/Src/DOT_MATRIX.c:160:13:DisplayBuffer	5
+../Core/Src/DOT_MATRIX.c:186:13:PushToBuffer	2
+../Core/Src/DOT_MATRIX.c:201:6:DOT_MATRIX_Init	12
+../Core/Src/DOT_MATRIX.c:301:6:DOT_MATRIX_Init_TMR	1
+../Core/Src/DOT_MATRIX.c:329:6:MATRIX_SCROLL_SetSpeed	1
+../Core/Src/DOT_MATRIX.c:334:6:MATRIX_CLEAR	3
+../Core/Src/DOT_MATRIX.c:347:6:MATRIX_Write_Char	2
+../Core/Src/DOT_MATRIX.c:360:6:MATRIX_DisplayMessage	1
+../Core/Src/DOT_MATRIX.c:367:6:DOT_MATRIX_Main	8
+../Core/Src/DOT_MATRIX.c:407:6:MATRIX_TMR_OVF_ISR	9
