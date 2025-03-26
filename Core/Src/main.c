@@ -25,25 +25,26 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define SAMPLE_RATE   1500.0f
-#define BUFFER_SIZE   4096
+#define BUFFER_SIZE   10000
 
 #define PI            3.14159265358979323846f
 #define SQRT2         1.4142135623730950488f
 
 #define K 			  3  // taille de la fenêtre moy gliss
+#define K_dev         20
 
-#define THRESHOLD_BPM			 0.1f   //detection des pics
+#define THRESHOLD_BPM			 10.0f   //detection des pics
 #define MATRIX_DISPLAY_UNIT1 	 0
 
-#define NUM_PEAKS_FOR_BPM 		50      // nombre de pics à utiliser pour le calcul du BPM
+#define NUM_PEAKS_FOR_BPM 		15      // nombre de pics à utiliser pour le calcul du BPM
 
 // Paramètres du filtre FIR
-#define FIR_ORDER 	       64
-#define LP_CUTOFF  		   45.0f       // Hz Freq coupure du filtre passe-bas
+#define FIR_ORDER 	       90
+#define LP_CUTOFF  		   50.0f       // Hz Freq coupure du filtre passe-bas
 
 // Paramètres du filtre de Kalman
 #define KALMAN_R      0.005f  // Variance du bruit de mesure
-#define KALMAN_Q      0.0001f // Variance du bruit de processus
+#define KALMAN_Q      0.0005f // Variance du bruit de processus
 
 /* USER CODE END PD */
 
@@ -80,6 +81,10 @@ float bpm = 0.0f;
 char bpm_buffer[8];
 int cnt_bpm = 0;
 
+// Tableau pour stocker les intervalles R-R en ms
+volatile uint32_t rr_intervals[NUM_PEAKS_FOR_BPM-1] = {0};
+volatile int rr_index = 0;
+volatile int valid_intervals = 0;
 
 /* USER CODE END PV */
 
@@ -323,13 +328,14 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
         {
             // Appliquer la saturation
             float val;
-            if (adc_buffer[i] < 800.0f)
+            if (adc_buffer[i] < 1000.0f)
             {
                 val = (float)adc_buffer[i];
             }
             else
             {
-                val = 800.0f;
+            	val = (float)adc_buffer[i];
+            	//val = 1000.0f;
             }
             sum += val;
         }
@@ -351,58 +357,95 @@ void process_and_transmit(float avg_val)
     // Filtre passe-bas (LP) ordre 2
     float lp_val = apply_lpf_order2(avg_val);
 
-    // Filtre passe-haut (HP)
+    // Filtre de Kalman
     float kalman_val = apply_kalman_filter(lp_val);
 
     // Stockage circulaire
     filtered_buffer[buffer_index] = kalman_val;
     buffer_index = (buffer_index + 1) % BUFFER_SIZE;
 
-    //BPM
-    static float squared_val = 0.0f;
+    static float squared_buffer[K] = {0.0f};
+    static int squared_index = 0;
 
-    // Tableau pour stocker les horodatages des pics
-    static uint32_t peak_times[NUM_PEAKS_FOR_BPM] = {0};
-    static int peak_index = 0;
+    // Calcul du signal au carré
+    float val_squared = kalman_val * kalman_val;
 
-    // Élévation au carré
-    squared_val = kalman_val * kalman_val;
+    // Si kalman_val est négatif, mettre val_squared à 0
+    if (kalman_val < 0) {
+        val_squared = 0.0f;
+    }
 
-    // Détection des pics
-    if (squared_val > THRESHOLD_BPM) {
+    // Mise à jour du buffer de valeurs au carré
+    squared_buffer[squared_index] = val_squared;
+    squared_index = (squared_index + 1) % K;
+
+    // Calcul de la moyenne mobile du signal au carré
+    float squared_sum = 0.0f;
+    for (int i = 0; i < K; i++) {
+        squared_sum += squared_buffer[i];
+    }
+    float squared_avg = squared_sum / K;
+
+    // Détection des pics basée sur la moyenne mobile du signal au carré
+    if (squared_avg > THRESHOLD_BPM) {
         uint32_t current_time = HAL_GetTick(); // Temps en ms
 
-        // Éviter la détection de plusieurs pics trop rapprochés
+        // Éviter la détection de plusieurs pics trop rapprochés (200ms = 300BPM max)
         if (current_time - last_peak_time > 200) {
-            // Enregistrer l'horodatage du pic actuel
-            peak_times[peak_index] = current_time;
-            peak_index = (peak_index + 1) % NUM_PEAKS_FOR_BPM; // Stockage circulaire
-
+            // Calcul de l'intervalle R-R
+            if (last_peak_time > 0) {
+                uint32_t interval = current_time - last_peak_time;
+                
+                // Stockage de l'intervalle R-R
+                rr_intervals[rr_index] = interval;
+                rr_index = (rr_index + 1) % (NUM_PEAKS_FOR_BPM-1);
+                if (valid_intervals < NUM_PEAKS_FOR_BPM-1) {
+                    valid_intervals++;
+                }
+            }
+            
             // Mettre à jour le dernier temps de pic
             last_peak_time = current_time;
             peak_count++;
-        }
-    }
-
-    // Calcul du BPM basé sur les derniers pics
-    if (peak_count >= 5) {  // min 5 pics pour calculer
-        int num_peaks_to_use = (peak_count < NUM_PEAKS_FOR_BPM) ? peak_count : NUM_PEAKS_FOR_BPM;
-
-        int oldest_peak_idx = (peak_index - num_peaks_to_use + NUM_PEAKS_FOR_BPM) % NUM_PEAKS_FOR_BPM;
-        uint32_t oldest_time = peak_times[oldest_peak_idx];
-
-        if (oldest_time > 0) {
-            // Calcul du BPM basé sur le temps entre le pic le plus ancien et le plus récent
-            uint32_t time_span = last_peak_time - oldest_time;
-            if (time_span > 0) {
-                bpm = ((num_peaks_to_use - 1) * 60000.0f) / (float)time_span;
+            
+            // Calcul du BPM à partir des intervalles R-R
+            if (valid_intervals >= 3) { // Besoin d'au moins 3 intervalles
+                float sum_intervals = 0.0f;
+                int intervals_to_use = valid_intervals;
+                
+                // Utiliser les intervalles valides pour calculer la moyenne
+                for (int i = 0; i < intervals_to_use; i++) {
+                    int idx = (rr_index - 1 - i + (NUM_PEAKS_FOR_BPM-1)) % (NUM_PEAKS_FOR_BPM-1);
+                    sum_intervals += rr_intervals[idx];
+                }
+                
+                // Calcul du BPM: 60000ms / moyenne des intervalles R-R
+                float avg_interval = sum_intervals / intervals_to_use;
+                float current_bpm = 60000.0f / avg_interval;
+                
+                // Filtrage pour éliminer les valeurs aberrantes
+                if (current_bpm >= 40.0f && current_bpm <= 200.0f) {
+                    // Moyenne mobile pour lisser le BPM
+                    static float bpm_sum = 0.0f;
+                    static int bpm_samples = 0;
+                    const int bpm_avg_window = 5; // Réduit à 5 pour plus de réactivité
+                    
+                    bpm_sum += current_bpm;
+                    bpm_samples++;
+                    
+                    if (bpm_samples >= bpm_avg_window) {
+                        bpm = bpm_sum / bpm_avg_window;
+                        bpm_sum = 0.0f;
+                        bpm_samples = 0;
+                    }
+                }
             }
         }
     }
 
     // Transmission UART des valeurs pour Serial Plotter
     char tx_buffer[64];
-    sprintf(tx_buffer, "%.2f %.2f %.2f %.2f %.2f\n", avg_val, lp_val, kalman_val, squared_val, bpm);
+    sprintf(tx_buffer, "%.2f %.2f %.2f %.2f %.2f\n", avg_val, lp_val, kalman_val, squared_avg, bpm);
     HAL_UART_Transmit(&huart1, (uint8_t*)tx_buffer, strlen(tx_buffer), HAL_MAX_DELAY);
 }
 
